@@ -1,6 +1,8 @@
 import os
 import tempfile
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, wait as futures_wait, ALL_COMPLETED
 from pathlib import Path
 from typing import Optional, List
 
@@ -51,20 +53,19 @@ def get_azure_client() -> DocumentIntelligenceClient:
 
 
 def _is_page_empty(page) -> bool:
-    """Return True if the page has no visible content (no text, no image/form XObjects)."""
+    """Return True only if the page has no content stream and no text."""
+    # Any page with a /Contents entry has drawing operations (text, images, forms)
     try:
-        text = page.extract_text()
-        if text and text.strip():
+        if page.get('/Contents') is not None:
             return False
     except Exception:
         pass
 
+    # Fallback: check for extracted text
     try:
-        resources = page.get('/Resources')
-        if resources:
-            xobjects = resources.get('/XObject')
-            if xobjects:
-                return False
+        text = page.extract_text()
+        if text and text.strip():
+            return False
     except Exception:
         pass
 
@@ -148,8 +149,9 @@ def extract_text_from_pdf(file_path: str) -> str:
     Returns:
         Extracted text from the page
     """
+    logger.info(f"extract_text_from_pdf starting: {file_path}")
     client = get_azure_client()
-    
+
     try:
         # Read the PDF file as bytes
         with open(file_path, "rb") as f:
@@ -201,18 +203,32 @@ def process_pdf_pages(input_pdf_path: str) -> str:
         # Split PDF into individual page files
         page_files = split_pdf_by_pages(input_pdf_path, temp_page_dir)
         
-        # Process each page file separately
+        # Submit all pages to a 3-worker threadpool then wait for ALL to finish
         accumulated_text = []
-        
-        for i, page_file in enumerate(page_files, start=1):
-            logger.info(f"Processing page {i} of {len(page_files)}")
-            
-            # Extract text from this single page
-            page_text = extract_text_from_pdf(page_file)
-            
-            # Add page separator and content
-            accumulated_text.append(f"\n--- Page {i} ---\n")
-            accumulated_text.append(page_text)
+        total = len(page_files)
+        logger.info(f"Submitting {total} pages to threadpool")
+
+        executor = ThreadPoolExecutor(max_workers=6)
+        try:
+            future_to_idx = {}
+            for i, pf in enumerate(page_files, start=1):
+                future_to_idx[executor.submit(extract_text_from_pdf, pf)] = i
+                if i < total:
+                    time.sleep(1)
+
+            done, not_done = futures_wait(future_to_idx.keys(), return_when=ALL_COMPLETED)
+            logger.info(f"Threadpool finished: {len(done)} done, {len(not_done)} not done")
+
+            if not_done:
+                raise Exception(f"{len(not_done)} page(s) did not complete")
+
+            # Collect results in page order; future.result() re-raises any thread exception
+            page_results = {future_to_idx[f]: f.result() for f in done}
+            for i in sorted(page_results):
+                accumulated_text.append(f"\n--- Page {i} ---\n")
+                accumulated_text.append(page_results[i])
+        finally:
+            executor.shutdown(wait=False)
         
         # Join all page texts
         final_text = "\n".join(accumulated_text)
