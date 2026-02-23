@@ -2,13 +2,14 @@ import os
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
+from pypdf import PdfReader, PdfWriter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,16 +50,53 @@ def get_azure_client() -> DocumentIntelligenceClient:
     )
 
 
-def extract_text_from_pdf(file_path: str) -> str:
+def split_pdf_by_pages(input_pdf_path: str, output_dir: str) -> List[str]:
     """
-    Extract text from PDF using Azure Document Intelligence.
-    Processes each page and accumulates the results.
+    Split a PDF into separate files, one per page.
     
     Args:
-        file_path: Path to the PDF file
+        input_pdf_path: Path to the input PDF file
+        output_dir: Directory to save the split pages
         
     Returns:
-        Extracted text from all pages
+        List of paths to the split PDF files
+    """
+    page_files = []
+    
+    try:
+        reader = PdfReader(input_pdf_path)
+        total_pages = len(reader.pages)
+        logger.info(f"Splitting PDF into {total_pages} pages")
+        
+        for page_num, page in enumerate(reader.pages, start=1):
+            # Create a new PDF with just this page
+            writer = PdfWriter()
+            writer.add_page(page)
+            
+            # Save the page as a separate PDF
+            page_file_path = os.path.join(output_dir, f"page_{page_num}.pdf")
+            with open(page_file_path, "wb") as output_file:
+                writer.write(output_file)
+            
+            page_files.append(page_file_path)
+            logger.info(f"Created page file: {page_file_path}")
+        
+        return page_files
+        
+    except Exception as e:
+        logger.error(f"Error splitting PDF: {e}")
+        raise Exception(f"Error splitting PDF: {str(e)}")
+
+
+def extract_text_from_pdf(file_path: str) -> str:
+    """
+    Extract text from a single-page PDF using Azure Document Intelligence.
+    
+    Args:
+        file_path: Path to the PDF file (should be a single page)
+        
+    Returns:
+        Extracted text from the page
     """
     client = get_azure_client()
     
@@ -73,28 +111,17 @@ def extract_text_from_pdf(file_path: str) -> str:
             )
             result = poller.result()
         
-        # Accumulate text from all pages
-        accumulated_text = []
+        # Extract text from the page
+        page_text = []
         
         if result.pages:
-            logger.info(f"Processing {len(result.pages)} pages")
-            
             for page in result.pages:
-                page_text = []
-                page_text.append(f"\n--- Page {page.page_number} ---\n")
-                
                 # Extract text from lines on this page
                 if page.lines:
                     for line in page.lines:
                         page_text.append(line.content)
-                
-                accumulated_text.append("\n".join(page_text))
         
-        # Join all page texts
-        final_text = "\n".join(accumulated_text)
-        
-        logger.info(f"Successfully extracted {len(final_text)} characters from PDF")
-        return final_text
+        return "\n".join(page_text)
         
     except HttpResponseError as e:
         logger.error(f"Azure API error: {e}")
@@ -102,6 +129,61 @@ def extract_text_from_pdf(file_path: str) -> str:
     except Exception as e:
         logger.error(f"Error processing PDF: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
+
+
+def process_pdf_pages(input_pdf_path: str) -> str:
+    """
+    Process a multi-page PDF by splitting it into individual pages,
+    sending each page to Azure Document Intelligence, and aggregating results.
+    
+    Args:
+        input_pdf_path: Path to the input PDF file
+        
+    Returns:
+        Aggregated text from all pages
+    """
+    # Create temporary directory for page files
+    temp_page_dir = tempfile.mkdtemp(dir=TEMP_DIR, prefix="pages_")
+    page_files = []
+    
+    try:
+        # Split PDF into individual page files
+        page_files = split_pdf_by_pages(input_pdf_path, temp_page_dir)
+        
+        # Process each page file separately
+        accumulated_text = []
+        
+        for i, page_file in enumerate(page_files, start=1):
+            logger.info(f"Processing page {i} of {len(page_files)}")
+            
+            # Extract text from this single page
+            page_text = extract_text_from_pdf(page_file)
+            
+            # Add page separator and content
+            accumulated_text.append(f"\n--- Page {i} ---\n")
+            accumulated_text.append(page_text)
+        
+        # Join all page texts
+        final_text = "\n".join(accumulated_text)
+        
+        logger.info(f"Successfully processed {len(page_files)} pages, extracted {len(final_text)} characters")
+        return final_text
+        
+    finally:
+        # Clean up all page files
+        for page_file in page_files:
+            try:
+                if os.path.exists(page_file):
+                    os.unlink(page_file)
+            except Exception as e:
+                logger.warning(f"Failed to clean up page file {page_file}: {e}")
+        
+        # Remove temporary page directory
+        try:
+            if os.path.exists(temp_page_dir):
+                os.rmdir(temp_page_dir)
+        except Exception as e:
+            logger.warning(f"Failed to remove temp page directory {temp_page_dir}: {e}")
 
 
 @app.get("/")
@@ -177,8 +259,8 @@ async def process_document(
             temp_file_path = temp_file.name
             logger.info(f"Saved uploaded file to {temp_file_path} ({len(pdf_data)} bytes)")
         
-        # Extract text from PDF
-        extracted_text = extract_text_from_pdf(temp_file_path)
+        # Process PDF by splitting into pages and processing each page
+        extracted_text = process_pdf_pages(temp_file_path)
         
         # Return in format compatible with Open Web UI
         # Client expects: {"page_content": "...", "metadata": {...}}

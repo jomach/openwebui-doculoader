@@ -5,7 +5,7 @@ External document OCR service for Open Web UI using Azure Document Intelligence.
 ## Features
 
 - **Azure Document Intelligence Integration**: Uses Azure's powerful OCR capabilities via Azure Foundry
-- **Per-Page Processing**: Processes each PDF page individually and accumulates results
+- **Per-Page Processing**: Splits PDF into individual page files, sends each page separately to Azure Document Intelligence, and accumulates results
 - **Open Web UI Compatible**: Implements the standard external document extraction API format
 - **FastAPI Backend**: High-performance async API with automatic documentation
 - **Docker Support**: Easy deployment with Docker container
@@ -130,12 +130,12 @@ Now when you upload PDF documents to Open Web UI, they will be processed through
 ## How It Works
 
 1. Client (Open Web UI) sends a PUT request to `/process` with raw PDF data
-2. File is temporarily saved to the work directory
-3. PDF is sent to Azure Document Intelligence using the `prebuilt-read` model
-4. Each page is processed individually by Azure
-5. Text from all pages is accumulated and formatted
+2. PDF is split into individual page files using pypdf library
+3. Each page file is sent separately to Azure Document Intelligence using the `prebuilt-read` model
+4. Text is extracted from each page independently
+5. Results from all pages are accumulated and formatted with page markers
 6. Complete text is returned in `page_content` field with metadata
-7. Temporary file is cleaned up
+7. Temporary files (original PDF and page files) are cleaned up
 
 ## Development
 
