@@ -2,7 +2,7 @@ fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.6
 azure-ai-documentintelligence==1.0.0b2
-azure-core==1.29.7
+azure-core>=1.30.0
 
 # Testing dependencies (optional)
 requests==2.31.0
