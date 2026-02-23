@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  doculoader:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=${AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT}
+      - AZURE_DOCUMENT_INTELLIGENCE_KEY=${AZURE_DOCUMENT_INTELLIGENCE_KEY}
+      - TEMP_WORK_DIR=/tmp/doculoader
+    volumes:
+      - temp-data:/tmp/doculoader
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  temp-data:
