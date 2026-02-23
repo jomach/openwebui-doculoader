@@ -88,10 +88,19 @@ def test_extract_endpoint(base_url, pdf_file=None):
                 print(f"\n  Preview of extracted text:")
                 print(f"  {text[:200]}{'...' if len(text) > 200 else ''}")
             return True
-        elif response.status_code == 500 and "credentials not configured" in response.text:
-            print(f"⚠ Extraction endpoint available but Azure credentials not configured")
-            print(f"  This is expected if testing without Azure setup")
-            return True
+        elif response.status_code == 500:
+            # Check if it's a configuration error (expected in test environment)
+            try:
+                error_detail = response.json().get('detail', '')
+                if "credentials not configured" in error_detail.lower():
+                    print(f"⚠ Extraction endpoint available but Azure credentials not configured")
+                    print(f"  This is expected if testing without Azure setup")
+                    return True
+            except:
+                pass
+            print(f"✗ Extraction failed with status {response.status_code}")
+            print(f"  Response: {response.text}")
+            return False
         else:
             print(f"✗ Extraction failed with status {response.status_code}")
             print(f"  Response: {response.text}")
