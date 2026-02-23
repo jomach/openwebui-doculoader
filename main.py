@@ -50,39 +50,89 @@ def get_azure_client() -> DocumentIntelligenceClient:
     )
 
 
+def _is_page_empty(page) -> bool:
+    """Return True if the page has no visible content (no text, no image/form XObjects)."""
+    try:
+        text = page.extract_text()
+        if text and text.strip():
+            return False
+    except Exception:
+        pass
+
+    try:
+        resources = page.get('/Resources')
+        if resources:
+            xobjects = resources.get('/XObject')
+            if xobjects:
+                return False
+    except Exception:
+        pass
+
+    return True
+
+
+def _is_landscape_page(page) -> bool:
+    """Return True if the page renders in landscape orientation (effective width > height)."""
+    width = float(page.mediabox.width)
+    height = float(page.mediabox.height)
+    rotation = page.rotation  # 0, 90, 180, or 270
+
+    # A 90° or 270° /Rotate swaps the effective display dimensions
+    if rotation in (90, 270):
+        width, height = height, width
+
+    return width > height
+
+
 def split_pdf_by_pages(input_pdf_path: str, output_dir: str) -> List[str]:
     """
     Split a PDF into separate files, one per page.
-    
+    Empty pages are skipped. Landscape pages are rotated 90° to portrait
+    so that OCR reads horizontal text correctly.
+
     Args:
         input_pdf_path: Path to the input PDF file
         output_dir: Directory to save the split pages
-        
+
     Returns:
         List of paths to the split PDF files
     """
     page_files = []
-    
+
     try:
-        reader = PdfReader(input_pdf_path)
+        reader: PdfReader = PdfReader(input_pdf_path)
         total_pages = len(reader.pages)
         logger.info(f"Splitting PDF into {total_pages} pages")
-        
+
         for page_num, page in enumerate(reader.pages, start=1):
+            # Skip blank pages
+            if _is_page_empty(page):
+                logger.info(f"Skipping empty page {page_num}")
+                continue
+
             # Create a new PDF with just this page
             writer = PdfWriter()
             writer.add_page(page)
-            
+
+            # Rotate landscape pages to portrait for correct OCR orientation
+            if _is_landscape_page(page):
+                w = float(page.mediabox.width)
+                h = float(page.mediabox.height)
+                logger.info(
+                    f"Page {page_num} is landscape ({w:.0f}×{h:.0f}), rotating 90° to portrait"
+                )
+                writer.pages[0].rotate(90)
+
             # Save the page as a separate PDF
             page_file_path = os.path.join(output_dir, f"page_{page_num}.pdf")
             with open(page_file_path, "wb") as output_file:
                 writer.write(output_file)
-            
+
             page_files.append(page_file_path)
             logger.info(f"Created page file: {page_file_path}")
-        
+
         return page_files
-        
+
     except Exception as e:
         logger.error(f"Error splitting PDF: {e}")
         raise Exception(f"Error splitting PDF: {str(e)}")
@@ -101,15 +151,16 @@ def extract_text_from_pdf(file_path: str) -> str:
     client = get_azure_client()
     
     try:
-        # Read the PDF file
+        # Read the PDF file as bytes
         with open(file_path, "rb") as f:
-            # Use prebuilt-read model for OCR
-            poller = client.begin_analyze_document(
-                "prebuilt-read",
-                body=f,
-                content_type="application/pdf"
-            )
-            result = poller.result()
+            pdf_bytes = f.read()
+        # Use prebuilt-read model for OCR
+        poller = client.begin_analyze_document(
+            "prebuilt-read",
+            body=pdf_bytes,
+            content_type="application/pdf"
+        )
+        result = poller.result()
         
         # Extract text from the page
         page_text = []
