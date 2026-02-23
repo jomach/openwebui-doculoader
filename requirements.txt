@@ -4,6 +4,9 @@ python-multipart==0.0.22
 azure-ai-documentintelligence==1.0.0b2
 azure-core>=1.30.0
 
-# Testing dependencies (optional)
+# Testing dependencies
+pytest==7.4.4
+pytest-asyncio==0.23.3
+httpx==0.26.0
 requests==2.31.0
 reportlab==4.0.9

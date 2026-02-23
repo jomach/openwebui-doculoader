@@ -86,21 +86,22 @@ Response:
 }
 ```
 
-### Extract Document
+### Process Document
 
 ```bash
-POST /api/extract
-Content-Type: multipart/form-data
+PUT /process
+Content-Type: application/pdf
+X-Filename: document.pdf (optional)
+Authorization: Bearer <token> (optional)
 ```
 
-**Parameters:**
-- `file`: PDF file to process
+**Request Body:** Raw PDF file data
 
 **Response:**
 ```json
 {
-  "text": "Extracted text from all pages...",
-  "meta": {
+  "page_content": "Extracted text from all pages...",
+  "metadata": {
     "filename": "document.pdf",
     "content_type": "application/pdf",
     "engine": "azure-document-intelligence"
@@ -119,19 +120,21 @@ Once running, access interactive API documentation at:
 1. Deploy this service (Docker recommended)
 2. In Open Web UI, go to **Settings > Documents**
 3. Select **Custom** as the extraction engine
-4. Set the extraction URL to your deployment: `http://your-server:8000/api/extract`
+4. Set the extraction URL to your deployment: `http://your-server:8000`
 5. Save the configuration
+
+The service will automatically handle PUT requests to `/process` endpoint.
 
 Now when you upload PDF documents to Open Web UI, they will be processed through Azure Document Intelligence with per-page OCR.
 
 ## How It Works
 
-1. Client uploads a PDF file to `/api/extract`
+1. Client (Open Web UI) sends a PUT request to `/process` with raw PDF data
 2. File is temporarily saved to the work directory
 3. PDF is sent to Azure Document Intelligence using the `prebuilt-read` model
 4. Each page is processed individually by Azure
 5. Text from all pages is accumulated and formatted
-6. Complete text is returned to the client in Open Web UI compatible format
+6. Complete text is returned in `page_content` field with metadata
 7. Temporary file is cleaned up
 
 ## Development
@@ -140,16 +143,22 @@ Now when you upload PDF documents to Open Web UI, they will be processed through
 
 ```bash
 # Using curl
-curl -X POST "http://localhost:8000/api/extract" \
-  -F "file=@test-document.pdf"
+curl -X PUT "http://localhost:8000/process" \
+  -H "Content-Type: application/pdf" \
+  -H "X-Filename: test.pdf" \
+  --data-binary "@test-document.pdf"
 
 # Using Python
 import requests
 
 with open('test-document.pdf', 'rb') as f:
-    response = requests.post(
-        'http://localhost:8000/api/extract',
-        files={'file': f}
+    response = requests.put(
+        'http://localhost:8000/process',
+        data=f.read(),
+        headers={
+            'Content-Type': 'application/pdf',
+            'X-Filename': 'test.pdf'
+        }
     )
     print(response.json())
 ```

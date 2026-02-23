@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.core.credentials import AzureKeyCredential
@@ -123,20 +123,42 @@ async def health():
     }
 
 
-@app.post("/api/extract")
-async def extract_document(file: UploadFile = File(...)):
+@app.put("/process")
+async def process_document(
+    request: Request,
+    content_type: Optional[str] = Header(None),
+    x_filename: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None)
+):
     """
-    Extract text from uploaded document using Azure Document Intelligence.
+    Process uploaded document using Azure Document Intelligence.
     Compatible with Open Web UI external document extraction format.
     
+    This endpoint expects raw PDF data in the request body (not multipart form).
+    
     Args:
-        file: Uploaded file (PDF)
+        request: FastAPI request object with PDF data in body
+        content_type: Content-Type header
+        x_filename: X-Filename header with the original filename
+        authorization: Authorization header (Bearer token)
         
     Returns:
-        JSON response with extracted text
+        JSON response with page_content and metadata
     """
-    # Validate file type
-    if not file.filename.lower().endswith('.pdf'):
+    # Read raw body data
+    pdf_data = await request.body()
+    
+    if not pdf_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No file data provided"
+        )
+    
+    # Extract filename from header or use default
+    filename = x_filename or "document.pdf"
+    
+    # Validate it's a PDF (basic check)
+    if not filename.lower().endswith('.pdf'):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are supported"
@@ -151,22 +173,21 @@ async def extract_document(file: UploadFile = File(...)):
             suffix='.pdf',
             dir=TEMP_DIR
         ) as temp_file:
-            # Write file contents
-            content = await file.read()
-            temp_file.write(content)
+            temp_file.write(pdf_data)
             temp_file_path = temp_file.name
-            logger.info(f"Saved uploaded file to {temp_file_path}")
+            logger.info(f"Saved uploaded file to {temp_file_path} ({len(pdf_data)} bytes)")
         
         # Extract text from PDF
         extracted_text = extract_text_from_pdf(temp_file_path)
         
         # Return in format compatible with Open Web UI
+        # Client expects: {"page_content": "...", "metadata": {...}}
         return JSONResponse(
             content={
-                "text": extracted_text,
-                "meta": {
-                    "filename": file.filename,
-                    "content_type": file.content_type,
+                "page_content": extracted_text,
+                "metadata": {
+                    "filename": filename,
+                    "content_type": content_type or "application/pdf",
                     "engine": "azure-document-intelligence"
                 }
             }
