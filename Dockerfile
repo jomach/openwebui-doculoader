@@ -1,0 +1,32 @@
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY main.py .
+
+# Create temp work directory
+RUN mkdir -p /tmp/doculoader
+
+# Environment variables (defaults, override with docker run -e)
+ENV AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=""
+ENV AZURE_DOCUMENT_INTELLIGENCE_KEY=""
+ENV TEMP_WORK_DIR="/tmp/doculoader"
+
+# Expose port
+EXPOSE 8000
+
+# Run the application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
